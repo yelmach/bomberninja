@@ -1,9 +1,9 @@
-// Board Dimensions & Constants
-const BOARD_WIDTH = 20;
-const TOTAL_CELLS = 400; // 20x20 grid
-const DIRECTIONS = [-BOARD_WIDTH, BOARD_WIDTH, -1, 1]; // Up, Down, Left, Right
+// The board is a 20 x 20 grid stored as one list.
+const BOARD_WIDTH = 20
+const TOTAL_CELLS = 400
+const DIRECTIONS = [-BOARD_WIDTH, BOARD_WIDTH, -1, 1] // Up, down, left, right
 
-// Cell Types
+// Values used by the game for each type of board cell.
 const Cell = {
   EMPTY: 0,
   BRICK: 1,
@@ -13,370 +13,504 @@ const Cell = {
   POWERUP_LIVE: 6,
   POWERUP_BOMB: 7,
   POWERUP_POWER: 8,
-};
+}
 
-// Move Commands
+// Special moves understood by the game.
 const Move = {
   PLACE_BOMB: -1,
   STAY: 0,
-};
-
-function isNeighbor(from, to) {
-  if (to < 0 || to >= TOTAL_CELLS) return false;
-  const diff = Math.abs(to - from);
-  return diff === BOARD_WIDTH || (diff === 1 && Math.floor(from / BOARD_WIDTH) === Math.floor(to / BOARD_WIDTH));
 }
 
-function getWalkable(pos, board) {
+// Check that two positions touch without wrapping around a board edge.
+function isNeighbor(fromPosition, toPosition) {
+  if (toPosition < 0 || toPosition >= TOTAL_CELLS) return false
+  const difference = Math.abs(toPosition - fromPosition)
+  return difference === BOARD_WIDTH
+    || (difference === 1
+      && Math.floor(fromPosition / BOARD_WIDTH)
+        === Math.floor(toPosition / BOARD_WIDTH))
+}
+
+// Return the open neighboring positions that a player can move to.
+function getWalkableNeighbors(position, board) {
   return DIRECTIONS
-    .map((dir) => pos + dir)
-    .filter((next) => isNeighbor(pos, next) && board[next] !== Cell.WALL && board[next] !== Cell.BRICK && board[next] !== Cell.BOMB);
+    .map((direction) => position + direction)
+    .filter((nextPosition) =>
+      isNeighbor(position, nextPosition) && board[nextPosition] !== Cell.WALL
+      && board[nextPosition] !== Cell.BRICK && board[nextPosition] !== Cell.BOMB
+    )
 }
 
-function getBlastTiles(bombPos, power, board) {
-  const blast = new Set([bombPos]);
-  for (const dir of DIRECTIONS) {
-    for (let p = 1; p <= power; p++) {
-      const target = bombPos + dir * p;
-      // Stop if ray leaves board or hits an impassable wall
-      if (!isNeighbor(target - dir, target) || board[target] === Cell.WALL) break;
-      blast.add(target);
-      // Bricks absorb the blast and prevent rays from continuing further
-      if (board[target] === Cell.BRICK) break;
+// Return every position reached by a bomb blast.
+function getBlastTiles(bombPosition, blastRange, board) {
+  const blastTiles = new Set([bombPosition])
+  for (const direction of DIRECTIONS) {
+    for (let distance = 1; distance <= blastRange; distance++) {
+      const targetPosition = bombPosition + direction * distance
+      // A board edge or wall stops the blast.
+      if (
+        !isNeighbor(targetPosition - direction, targetPosition)
+        || board[targetPosition] === Cell.WALL
+      ) break
+      blastTiles.add(targetPosition)
+      // The blast hits a brick, but does not continue through it.
+      if (board[targetPosition] === Cell.BRICK) break
     }
   }
-  return blast;
+  return blastTiles
 }
 
-const distToCenter = (pos) =>
-  Math.hypot(Math.floor(pos / BOARD_WIDTH) - 9.5, (pos % BOARD_WIDTH) - 9.5);
+// Measure the straight-line distance from a position to the board center.
+const distanceToCenter = (position) =>
+  Math.hypot(
+    Math.floor(position / BOARD_WIDTH) - 9.5,
+    (position % BOARD_WIDTH) - 9.5,
+  )
 
-const manhattan = (a, b) =>
-  Math.abs(Math.floor(a / BOARD_WIDTH) - Math.floor(b / BOARD_WIDTH)) +
-  Math.abs((a % BOARD_WIDTH) - (b % BOARD_WIDTH));
+// Count how many horizontal and vertical steps separate two positions.
+const getStepDistance = (firstPosition, secondPosition) =>
+  Math.abs(
+    Math.floor(firstPosition / BOARD_WIDTH)
+      - Math.floor(secondPosition / BOARD_WIDTH),
+  )
+  + Math.abs((firstPosition % BOARD_WIDTH) - (secondPosition % BOARD_WIDTH))
 
-function reconstructFirstStep(target, start, parent) {
-  let step = target;
-  while (parent[step] !== start && parent[step] !== -1) {
-    step = parent[step];
+// Follow the saved search route backward and return its first step.
+function getFirstStep(target, start, previousPosition) {
+  let step = target
+  while (previousPosition[step] !== start && previousPosition[step] !== -1) {
+    step = previousPosition[step]
   }
-  return step;
+  return step
 }
 
-function reconstructFullPath(target, start, parent) {
-  const path = [];
-  let curr = target;
-  while (curr !== start && curr !== -1) {
-    path.unshift(curr);
-    curr = parent[curr];
+// Follow the saved search route backward and rebuild the full path.
+function getFullPath(target, start, previousPosition) {
+  const path = []
+  let currentPosition = target
+  while (currentPosition !== start && currentPosition !== -1) {
+    path.unshift(currentPosition)
+    currentPosition = previousPosition[currentPosition]
   }
-  return path;
+  return path
 }
 
-function buildDangerMap(myPos, board) {
-  const activeBombs = [];
-  const lethal = new Set();
+// Find bombs, explosions, and safe moves around the player.
+function buildDangerMap(myPosition, board) {
+  const activeBombs = []
+  const lethal = new Set()
 
-  // Single pass over 400 cells to classify hazards
-  for (let i = 0; i < TOTAL_CELLS; i++) {
-    if (board[i] === Cell.BOMB) {
-      activeBombs.push(i);
-    } else if (board[i] === Cell.EXPLOSION) {
-      lethal.add(i); // Active explosion or permanent fire belt border
+  // Read the board once to find every current danger.
+  for (let position = 0; position < TOTAL_CELLS; position++) {
+    if (board[position] === Cell.BOMB) {
+      activeBombs.push(position)
+    } else if (board[position] === Cell.EXPLOSION) {
+      lethal.add(position) // This can be an explosion or the fire at the board edge.
     }
   }
 
-  // Project blast coverage for every ticking bomb
-  const allBlast = new Set();
-  for (const b of activeBombs) {
-    for (const c of getBlastTiles(b, 3, board)) {
-      allBlast.add(c);
+  // Mark the positions that every active bomb can hit.
+  const allBlast = new Set()
+  for (const bombPosition of activeBombs) {
+    for (const blastPosition of getBlastTiles(bombPosition, 3, board)) {
+      allBlast.add(blastPosition)
     }
   }
 
-  // Filter walkable moves that are completely free of all lethal hazards
-  const walkable = getWalkable(myPos, board);
-  const safeMoves = walkable.filter((m) => !lethal.has(m) && !allBlast.has(m));
+  // Safe moves are walkable positions outside explosions and bomb blasts.
+  const walkable = getWalkableNeighbors(myPosition, board)
+  const safeMoves = walkable.filter((move) =>
+    !lethal.has(move) && !allBlast.has(move)
+  )
 
-  return { activeBombs, lethal, allBlast, walkable, safeMoves };
+  return { activeBombs, lethal, allBlast, walkable, safeMoves }
 }
 
-function executeRetreat(retreatPlan, myPos, board, danger) {
-  // Step 1: Follow remaining steps along pre-computed escape path
+// Follow the escape path after placing a bomb.
+function followRetreatPlan(retreatPlan, myPosition, board, danger) {
+  // Keep following the saved path while it is still usable.
   if (retreatPlan.path.length > 0) {
-    const next = retreatPlan.path.shift();
-    if (danger.walkable.includes(next) && !danger.lethal.has(next)) {
-      return next;
+    const nextPosition = retreatPlan.path.shift()
+    if (
+      danger.walkable.includes(nextPosition) && !danger.lethal.has(nextPosition)
+    ) {
+      return nextPosition
     }
   }
 
-  // Step 2: Check if our bot is resting safely in the bunker outside our bomb's blast
-  const myBlast = getBlastTiles(retreatPlan.bombPos, 3, board);
-  const inSafety = !myBlast.has(myPos) && !danger.lethal.has(myPos);
+  // Wait if the player has reached safety and no other bomb can hit this position.
+  const myBlast = getBlastTiles(retreatPlan.bombPos, 3, board)
+  const isSafeFromOwnBomb = !myBlast.has(myPosition)
+    && !danger.lethal.has(myPosition)
 
-  if (inSafety) {
-    // If no opponent blast threatens the bunker, safely wait for detonation
-    if (!danger.allBlast.has(myPos)) {
-      return Move.STAY;
+  if (isSafeFromOwnBomb) {
+    if (!danger.allBlast.has(myPosition)) {
+      return Move.STAY
     }
   }
 
-  // Bunker is compromised or path blocked: return null to trigger Emergency Evasion
-  return null;
+  // The caller will find another escape move if this plan is no longer safe.
+  return null
 }
 
-function findEvasionMove(myPos, danger) {
-  // Option 1: Step to the safe move closest to the center citadel
+// Choose the safest available move when the player is in danger.
+function findEscapeMove(myPosition, danger) {
+  // Prefer a safe move toward the center.
   if (danger.safeMoves.length > 0) {
-    danger.safeMoves.sort((a, b) => distToCenter(a) - distToCenter(b));
-    return danger.safeMoves[0];
+    danger.safeMoves.sort((firstMove, secondMove) =>
+      distanceToCenter(firstMove) - distanceToCenter(secondMove)
+    )
+    return danger.safeMoves[0]
   }
 
-  const nonLethal = danger.walkable.filter((m) => !danger.lethal.has(m));
+  const nonLethalMoves = danger.walkable.filter((move) =>
+    !danger.lethal.has(move)
+  )
 
-  // Option 2: Trapped in a blast corridor - step furthest AWAY from nearest bomb
-  if (nonLethal.length > 0 && danger.activeBombs.length > 0) {
-    const nearestBomb = danger.activeBombs.reduce((closest, b) =>
-      manhattan(myPos, b) < manhattan(myPos, closest) ? b : closest, danger.activeBombs[0]);
-    nonLethal.sort((a, b) => manhattan(b, nearestBomb) - manhattan(a, nearestBomb));
-    return nonLethal[0];
+  // If every move is in a blast path, move as far as possible from the nearest bomb.
+  if (nonLethalMoves.length > 0 && danger.activeBombs.length > 0) {
+    const nearestBomb = danger.activeBombs.reduce(
+      (closestBomb, bombPosition) =>
+        getStepDistance(myPosition, bombPosition)
+            < getStepDistance(myPosition, closestBomb)
+          ? bombPosition
+          : closestBomb,
+      danger.activeBombs[0],
+    )
+    nonLethalMoves.sort((firstMove, secondMove) =>
+      getStepDistance(secondMove, nearestBomb)
+      - getStepDistance(firstMove, nearestBomb)
+    )
+    return nonLethalMoves[0]
   }
 
-  // Option 3: Step to any non-fire tile closest to center
-  if (nonLethal.length > 0) {
-    nonLethal.sort((a, b) => distToCenter(a) - distToCenter(b));
-    return nonLethal[0];
+  // Otherwise, use any position without fire and prefer the center.
+  if (nonLethalMoves.length > 0) {
+    nonLethalMoves.sort((firstMove, secondMove) =>
+      distanceToCenter(firstMove) - distanceToCenter(secondMove)
+    )
+    return nonLethalMoves[0]
   }
 
-  // Option 4: On permanent fire belt - any walkable move beats burning in place
+  // If standing on fire, any walkable move is better than staying still.
   if (danger.walkable.length > 0) {
-    danger.walkable.sort((a, b) => distToCenter(a) - distToCenter(b));
-    return danger.walkable[0];
+    danger.walkable.sort((firstMove, secondMove) =>
+      distanceToCenter(firstMove) - distanceToCenter(secondMove)
+    )
+    return danger.walkable[0]
   }
 
-  return Move.STAY;
+  return Move.STAY
 }
 
-
-function getClosestOpponent(myPos, players, myId) {
-  let closestOpp = null;
-  for (const [id, pos] of Object.entries(players)) {
-    if (id !== myId && pos !== undefined) {
-      if (closestOpp === null || manhattan(myPos, pos) < manhattan(myPos, closestOpp)) {
-        closestOpp = pos;
+// Return the position of the nearest opponent.
+function getClosestOpponent(myPosition, players, myId) {
+  let closestOpponent = null
+  for (const [playerId, playerPosition] of Object.entries(players)) {
+    if (playerId !== myId && playerPosition !== undefined) {
+      if (
+        closestOpponent === null
+        || getStepDistance(myPosition, playerPosition)
+          < getStepDistance(myPosition, closestOpponent)
+      ) {
+        closestOpponent = playerPosition
       }
     }
   }
-  return closestOpp;
+  return closestOpponent
 }
 
-function findBunkerPath(myPos, board, blast, danger, breadcrumbs) {
-  // Method A: Fast backtrack along recently visited safe breadcrumbs
-  let candidate = [];
-  for (let i = breadcrumbs.length - 1; i >= 0 && candidate.length < 4; i--) {
-    const past = breadcrumbs[i];
-    if (past !== myPos && !candidate.includes(past)) {
-      candidate.push(past);
-      if (!blast.has(past)) break; // Found a tile outside our new bomb's blast
+// Find a short path that leaves the blast area before placing a bomb.
+function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
+  // First, try to go back through recently visited positions.
+  let path = []
+  for (
+    let index = positionHistory.length - 1;
+    index >= 0 && path.length < 4;
+    index--
+  ) {
+    const previousPosition = positionHistory[index]
+    if (previousPosition !== myPosition && !path.includes(previousPosition)) {
+      path.push(previousPosition)
+      if (!blast.has(previousPosition)) break
     }
   }
 
-  // Method B: If breadcrumbs don't exit blast, run a short 4-step BFS bunker search
-  if (candidate.length === 0 || blast.has(candidate[candidate.length - 1])) {
-    const parent = new Int16Array(TOTAL_CELLS).fill(-1);
-    const dist = new Uint8Array(TOTAL_CELLS);
-    const queue = [myPos];
-    let qHead = 0;
-    let bunker = -1;
+  // If that does not work, search up to four steps for a safe position.
+  if (path.length === 0 || blast.has(path[path.length - 1])) {
+    const previousPosition = new Int16Array(TOTAL_CELLS).fill(-1)
+    const distance = new Uint8Array(TOTAL_CELLS)
+    const positionsToCheck = [myPosition]
+    let nextIndex = 0
+    let safePosition = -1
 
-    while (qHead < queue.length) {
-      const curr = queue[qHead++];
-      if (dist[curr] > 4) break;
+    while (nextIndex < positionsToCheck.length) {
+      const currentPosition = positionsToCheck[nextIndex++]
+      if (distance[currentPosition] > 4) break
 
-      // Safe bunker condition: outside our blast, outside enemy blasts, and not on fire
-      if (!blast.has(curr) && !danger.allBlast.has(curr) && !danger.lethal.has(curr) && curr !== myPos) {
-        bunker = curr;
-        break;
+      // A safe position is outside all blasts and fire.
+      if (
+        !blast.has(currentPosition) && !danger.allBlast.has(currentPosition)
+        && !danger.lethal.has(currentPosition) && currentPosition !== myPosition
+      ) {
+        safePosition = currentPosition
+        break
       }
 
-      for (const n of getWalkable(curr, board)) {
-        if (n !== myPos && parent[n] === -1 && !danger.allBlast.has(n) && !danger.lethal.has(n)) {
-          parent[n] = curr;
-          dist[n] = dist[curr] + 1;
-          queue.push(n);
+      for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
+        if (
+          neighbor !== myPosition && previousPosition[neighbor] === -1
+          && !danger.allBlast.has(neighbor) && !danger.lethal.has(neighbor)
+        ) {
+          previousPosition[neighbor] = currentPosition
+          distance[neighbor] = distance[currentPosition] + 1
+          positionsToCheck.push(neighbor)
         }
       }
     }
 
-    if (bunker !== -1) {
-      candidate = reconstructFullPath(bunker, myPos, parent);
+    if (safePosition !== -1) {
+      path = getFullPath(safePosition, myPosition, previousPosition)
     }
   }
 
-  // Ensure candidate route exists and successfully terminates outside the blast
-  if (candidate.length > 0 && !blast.has(candidate[candidate.length - 1])) {
-    return candidate;
+  // Only return a path that ends outside the new bomb's blast.
+  if (path.length > 0 && !blast.has(path[path.length - 1])) {
+    return path
   }
-  return null; // No verified retreat route exists: dropping a bomb would be suicide
+  return null
 }
 
-function tryPlantBomb(myPos, board, closestOpp, danger, breadcrumbs, myActiveBomb, turn) {
-  // Gating conditions: current tile must be empty, no bomb currently out, and no nearby ticking bomb
-  const canPlantTile = board[myPos] === Cell.EMPTY && myActiveBomb === null;
-  const noBombClose = danger.activeBombs.every((b) => manhattan(myPos, b) > 3);
-  if (!canPlantTile || !noBombClose) return null;
+// Decide whether to place a bomb and prepare a safe retreat path.
+function planBombPlacement(
+  myPosition,
+  board,
+  closestOpponent,
+  danger,
+  positionHistory,
+  myActiveBomb,
+  turn,
+) {
+  // Only place a bomb on an empty cell when no other bomb is close.
+  const canPlaceBomb = board[myPosition] === Cell.EMPTY && myActiveBomb === null
+  const noBombNearby = danger.activeBombs.every((bombPosition) =>
+    getStepDistance(myPosition, bombPosition) > 3
+  )
+  if (!canPlaceBomb || !noBombNearby) return null
 
-  // Tactical Triggers:
-  // 1. Brick mining (gated in late-game to avoid getting trapped by shrinking borders)
-  const touchesBrick = DIRECTIONS.some((d) => isNeighbor(myPos, myPos + d) && board[myPos + d] === Cell.BRICK);
-  const hasMovesCloser = danger.safeMoves.some((m) => distToCenter(m) < distToCenter(myPos));
-  const canMine = touchesBrick && (turn < 90 || distToCenter(myPos) <= 4.5 || !hasMovesCloser);
+  // Place bombs beside bricks, but be more careful when the board starts shrinking.
+  const isNextToBrick = DIRECTIONS.some((direction) =>
+    isNeighbor(myPosition, myPosition + direction)
+    && board[myPosition + direction] === Cell.BRICK
+  )
+  const canMoveCloserToCenter = danger.safeMoves.some((move) =>
+    distanceToCenter(move) < distanceToCenter(myPosition)
+  )
+  const shouldBreakBrick = isNextToBrick
+    && (turn < 90 || distanceToCenter(myPosition) <= 4.5
+      || !canMoveCloserToCenter)
 
-  // 2. Direct combat strike on adjacent opponent in blast cross
-  const blast = getBlastTiles(myPos, 1, board);
-  const canAttack = closestOpp !== null && blast.has(closestOpp);
+  // Also place a bomb when the nearest opponent is beside the player.
+  const blast = getBlastTiles(myPosition, 1, board)
+  const canAttack = closestOpponent !== null && blast.has(closestOpponent)
 
-  if (canMine || canAttack) {
-    // Only place bomb if a verified bunker escape path exists!
-    const retreatRoute = findBunkerPath(myPos, board, blast, danger, breadcrumbs);
-    if (retreatRoute !== null) {
-      return { bombPos: myPos, path: retreatRoute };
+  if (shouldBreakBrick || canAttack) {
+    // Do not place the bomb unless there is a safe way out.
+    const retreatPath = findRetreatPath(
+      myPosition,
+      board,
+      blast,
+      danger,
+      positionHistory,
+    )
+    if (retreatPath !== null) {
+      return { bombPos: myPosition, path: retreatPath }
     }
   }
 
-  return null;
+  return null
 }
 
+// Search for the best goal and return the first move toward it.
+function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
+  const previousPosition = new Int16Array(TOTAL_CELLS).fill(-1)
+  const distance = new Uint8Array(TOTAL_CELLS)
+  const positionsToCheck = [myPosition]
+  let nextIndex = 0
 
-function findGoalMove(myPos, board, closestOpp, danger, turn) {
-  const parentNav = new Int16Array(TOTAL_CELLS).fill(-1);
-  const distNav = new Uint8Array(TOTAL_CELLS);
-  const qNav = [myPos];
-  let qHeadNav = 0;
+  let lifeTarget = -1
+  let powerTarget = -1
+  let brickTarget = -1
+  let opponentTarget = -1
 
-  let targetLife = -1;
-  let targetPower = -1;
-  let targetBrick = -1;
-  let targetOpp = -1;
+  while (nextIndex < positionsToCheck.length) {
+    const currentPosition = positionsToCheck[nextIndex++]
+    if (distance[currentPosition] > 20) break
 
-  while (qHeadNav < qNav.length) {
-    const curr = qNav[qHeadNav++];
-    if (distNav[curr] > 20) break; // Limit search radius to 20 tiles
+    const cell = board[currentPosition]
 
-    const cell = board[curr];
-
-    // Priority 1: Extra Life (❤️)
-    if (cell === Cell.POWERUP_LIVE && (turn < 95 || distToCenter(curr) <= 5.5)) {
-      targetLife = curr;
-      break; // Immediate priority: stop search immediately
+    // First priority: extra life.
+    if (
+      cell === Cell.POWERUP_LIVE
+      && (turn < 95 || distanceToCenter(currentPosition) <= 5.5)
+    ) {
+      lifeTarget = currentPosition
+      break
     }
 
-    // Priority 2: Bomb & Power upgrades
-    if (targetPower === -1 && (cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER)) {
-      if (turn < 90 || distToCenter(curr) <= 4.5) targetPower = curr;
+    // Second priority: bomb and power upgrades.
+    if (
+      powerTarget === -1
+      && (cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER)
+    ) {
+      if (turn < 90 || distanceToCenter(currentPosition) <= 4.5) {
+        powerTarget = currentPosition
+      }
     }
 
-    // Priority 3: Destructible Bricks for mining
-    if (targetBrick === -1 && curr !== myPos) {
-      const nearBrick = DIRECTIONS.some((d) => isNeighbor(curr, curr + d) && board[curr + d] === Cell.BRICK);
-      if (nearBrick && (turn < 90 || distToCenter(curr) <= 4.5)) targetBrick = curr;
+    // Third priority: a position beside a breakable brick.
+    if (brickTarget === -1 && currentPosition !== myPosition) {
+      const isNearBrick = DIRECTIONS.some((direction) =>
+        isNeighbor(currentPosition, currentPosition + direction)
+        && board[currentPosition + direction] === Cell.BRICK
+      )
+      if (
+        isNearBrick && (turn < 90 || distanceToCenter(currentPosition) <= 4.5)
+      ) brickTarget = currentPosition
     }
 
-    // Priority 4: Opponent location for tactical closing
-    if (targetOpp === -1 && closestOpp !== null && curr === closestOpp && curr !== myPos) {
-      if (turn < 90 || distToCenter(closestOpp) <= 4.5) targetOpp = curr;
+    // Fourth priority: move toward the nearest opponent.
+    if (
+      opponentTarget === -1 && closestOpponent !== null
+      && currentPosition === closestOpponent && currentPosition !== myPosition
+    ) {
+      if (turn < 90 || distanceToCenter(closestOpponent) <= 4.5) {
+        opponentTarget = currentPosition
+      }
     }
 
-    // Expand search into walkable, hazard-free cells
-    for (const n of getWalkable(curr, board)) {
-      if (n !== myPos && parentNav[n] === -1 && !danger.allBlast.has(n) && !danger.lethal.has(n)) {
-        parentNav[n] = curr;
-        distNav[n] = distNav[curr] + 1;
-        qNav.push(n);
+    // Continue the search through walkable and safe positions.
+    for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
+      if (
+        neighbor !== myPosition && previousPosition[neighbor] === -1
+        && !danger.allBlast.has(neighbor) && !danger.lethal.has(neighbor)
+      ) {
+        previousPosition[neighbor] = currentPosition
+        distance[neighbor] = distance[currentPosition] + 1
+        positionsToCheck.push(neighbor)
       }
     }
   }
 
-  // Select target by strict priority order
-  const target = targetLife !== -1 ? targetLife : targetPower !== -1 ? targetPower : targetBrick !== -1 ? targetBrick : targetOpp;
+  // Choose the first available target in the priority order above.
+  const target = lifeTarget !== -1
+    ? lifeTarget
+    : powerTarget !== -1
+    ? powerTarget
+    : brickTarget !== -1
+    ? brickTarget
+    : opponentTarget
 
   if (target !== -1) {
-    const firstStep = reconstructFirstStep(target, myPos, parentNav);
+    const firstStep = getFirstStep(target, myPosition, previousPosition)
     if (danger.safeMoves.includes(firstStep)) {
-      return firstStep;
+      return firstStep
     }
   }
 
-  // Default fallback: Gravitate toward central safe citadel
+  // If there is no goal, use a safe move toward the center.
   if (danger.safeMoves.length > 0) {
-    danger.safeMoves.sort((a, b) => distToCenter(a) - distToCenter(b));
-    return danger.safeMoves[0];
+    danger.safeMoves.sort((firstMove, secondMove) =>
+      distanceToCenter(firstMove) - distanceToCenter(secondMove)
+    )
+    return danger.safeMoves[0]
   }
 
-  return Move.STAY;
+  return Move.STAY
 }
 
-
+// Create the tactic. The returned function chooses one move on each turn.
 export default (_initialState, playerId) => {
-  let turn = 0;
-  let myActiveBomb = null;
-  const breadcrumbs = [];
-  let retreatPlan = null; // { bombPos, path: [] }
+  let turn = 0
+  let myActiveBomb = null
+  const positionHistory = []
+  let retreatPlan = null // { bombPos, path: [] }
 
   return (state) => {
     try {
-      turn++;
-      const myPos = state.players[playerId];
-      const board = state.board;
-      if (myPos === undefined) return Move.STAY;
+      turn++
+      const myPosition = state.players[playerId]
+      const board = state.board
+      if (myPosition === undefined) return Move.STAY
 
-      // Clean up tracked bomb after detonation
+      // Forget the saved bomb and escape plan after the bomb explodes.
       if (myActiveBomb !== null && board[myActiveBomb] !== Cell.BOMB) {
-        myActiveBomb = null;
-        retreatPlan = null;
+        myActiveBomb = null
+        retreatPlan = null
       }
 
-      // Helper to maintain recent movement history for fast backtracking
-      const recordMove = (step) => {
-        if (step > 0 && step !== myPos) {
-          breadcrumbs.push(myPos);
-          if (breadcrumbs.length > 25) breadcrumbs.shift();
+      // Save recent positions so the player can quickly move back after placing a bomb.
+      const rememberMove = (move) => {
+        if (move > 0 && move !== myPosition) {
+          positionHistory.push(myPosition)
+          if (positionHistory.length > 25) positionHistory.shift()
         }
-        return step;
-      };
+        return move
+      }
 
-      // Phase 1: Threat Analysis (buildDangerMap)
-      const danger = buildDangerMap(myPos, board);
+      // First, check the nearby dangers.
+      const danger = buildDangerMap(myPosition, board)
 
-      // Phase 2: Bunker Retreat Execution (executeRetreat)
+      // Continue the escape plan after placing a bomb.
       if (retreatPlan !== null) {
-        const retreatMove = executeRetreat(retreatPlan, myPos, board, danger);
+        const retreatMove = followRetreatPlan(
+          retreatPlan,
+          myPosition,
+          board,
+          danger,
+        )
         if (retreatMove !== null) {
-          return recordMove(retreatMove);
+          return rememberMove(retreatMove)
         }
-        retreatPlan = null; // Retreat compromised or finished: yield to evasion
+        retreatPlan = null
       }
 
-      // Phase 3: Emergency Evasion (findEvasionMove)
-      if (danger.lethal.has(myPos) || (danger.allBlast.has(myPos) && danger.activeBombs.length > 0)) {
-        return recordMove(findEvasionMove(myPos, danger));
+      // Escape immediately when standing in fire or in a bomb's blast area.
+      if (
+        danger.lethal.has(myPosition)
+        || (danger.allBlast.has(myPosition) && danger.activeBombs.length > 0)
+      ) {
+        return rememberMove(findEscapeMove(myPosition, danger))
       }
 
-      // Identify closest opponent
-      const closestOpp = getClosestOpponent(myPos, state.players, playerId);
+      const closestOpponent = getClosestOpponent(
+        myPosition,
+        state.players,
+        playerId,
+      )
 
-      // Phase 4: Tactical Bomb Placement (tryPlantBomb)
-      const plan = tryPlantBomb(myPos, board, closestOpp, danger, breadcrumbs, myActiveBomb, turn);
-      if (plan !== null) {
-        myActiveBomb = myPos;
-        retreatPlan = plan;
-        return Move.PLACE_BOMB;
+      // Place a bomb only when there is a reason and a safe escape path.
+      const bombPlan = planBombPlacement(
+        myPosition,
+        board,
+        closestOpponent,
+        danger,
+        positionHistory,
+        myActiveBomb,
+        turn,
+      )
+      if (bombPlan !== null) {
+        myActiveBomb = myPosition
+        retreatPlan = bombPlan
+        return Move.PLACE_BOMB
       }
 
-      // Phase 5: Goal Navigation via BFS (findGoalMove)
-      return recordMove(findGoalMove(myPos, board, closestOpp, danger, turn));
+      // Otherwise, move toward the best goal found on the board.
+      return rememberMove(
+        findGoalMove(myPosition, board, closestOpponent, danger, turn),
+      )
     } catch (_err) {
-      return Move.STAY; // Graceful fallback on unexpected error
+      return Move.STAY // Stay still if an unexpected error happens.
     }
-  };
-};
+  }
+}
