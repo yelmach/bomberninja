@@ -1,0 +1,12 @@
+{
+  "name": "bomberninja-local",
+  "version": "1.0.0",
+  "description": "Local benchmark testing environment and official server for Bomberninja Tournament (01-Edu)",
+  "type": "module",
+  "scripts": {
+    "test": "node test-runner.js --benchmark 20 --tactics my-tactic.js easy",
+    "benchmark:easy": "node test-runner.js --benchmark 50 --tactics my-tactic.js easy",
+    "benchmark:medium": "node test-runner.js --benchmark 50 --tactics my-tactic.js medium",
+    "benchmark:hard": "node test-runner.js --benchmark 50 --tactics my-tactic.js hard"
+  }
+}
