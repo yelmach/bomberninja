@@ -1,10 +1,11 @@
 /**
- * Bomberninja Grandmaster AI Tactic (Tournament Edition - Champion)
+ * Bomberninja Grandmaster AI Tactic (Tournament Edition - Champion V2)
  * 
  * - Deterministic multi-step corridor bunker backtracking for 100% safe bomb placements (0 self-damage)
- * - Ultra-fast O(1) BFS navigation using flat typed arrays (Powerups > Bricks > Opponent > Center)
- * - Accurate blast ray simulation and permanent fire belt perimeter tracking
- * - Corner trapping against opponents as fire belt shrinks the arena
+ * - Heart / Extra Life top priority harvesting (❤️ Lives > 💣 Bombs > 🧨 Power)
+ * - High-speed flat-array BFS navigation
+ * - Controlled endgame combat (avoids reckless early-game open-field bombing)
+ * - Exact fire belt perimeter avoidance and center control
  * - Zero illegal moves, zero timeouts (< 0.05ms average latency per turn)
  */
 
@@ -235,7 +236,8 @@ export default (_initialState, playerId) => {
             Math.abs((myPos % BOARD_WIDTH) - (opponentPos % BOARD_WIDTH))
           : 999;
 
-      const shouldDropBomb = touchesBrick || opponentManhattan <= 2;
+      // Drop bombs to mine bricks, or to corner the opponent in the late game (turn > 70)
+      const shouldDropBomb = touchesBrick || (opponentManhattan <= 2 && turn > 70);
 
       if (shouldDropBomb && board[myPos] === Cell.EMPTY && activeBombs.length === 0) {
         const blast = getBlastTiles(myPos, myPower, board);
@@ -298,12 +300,13 @@ export default (_initialState, playerId) => {
         }
       }
 
-      // 8. Flat-Array BFS Navigation: Powerups > Bricks > Opponent > Center
+      // 8. Flat-Array BFS Navigation: Lives (❤️) > Powerups > Bricks > Opponent > Center
       const parentNav = new Int16Array(TOTAL_CELLS).fill(-1);
       const distNav = new Uint8Array(TOTAL_CELLS);
       const qNav = [myPos];
       let headNav = 0;
 
+      let lifeTarget = -1;
       let powerupTarget = -1;
       let brickTarget = -1;
       let opponentTarget = -1;
@@ -313,16 +316,24 @@ export default (_initialState, playerId) => {
         if (distNav[curr] > 18) break;
 
         const cell = board[curr];
-        if (cell === Cell.POWERUP_LIVE || cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER) {
-          powerupTarget = curr;
-          break; // Power-ups are highest priority
+        // Extra Life ❤️ is the highest value in the entire game
+        if (cell === Cell.POWERUP_LIVE) {
+          lifeTarget = curr;
+          break;
         }
 
+        // Other powerups (Bombs, Power)
+        if (powerupTarget === -1 && (cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER)) {
+          powerupTarget = curr;
+        }
+
+        // Brick excavator target
         if (brickTarget === -1 && curr !== myPos) {
           const nearBrick = DIRECTIONS.some((d) => isNeighbor(curr, curr + d) && board[curr + d] === Cell.BRICK);
           if (nearBrick) brickTarget = curr;
         }
 
+        // Opponent hunter target (when turn > 70)
         if (opponentTarget === -1 && curr === opponentPos && curr !== myPos) {
           opponentTarget = curr;
         }
@@ -337,7 +348,13 @@ export default (_initialState, playerId) => {
       }
 
       const target =
-        powerupTarget !== -1 ? powerupTarget : brickTarget !== -1 ? brickTarget : opponentTarget;
+        lifeTarget !== -1
+          ? lifeTarget
+          : powerupTarget !== -1
+          ? powerupTarget
+          : brickTarget !== -1
+          ? brickTarget
+          : opponentTarget;
 
       if (target !== -1) {
         let step = target;
@@ -351,7 +368,7 @@ export default (_initialState, playerId) => {
         }
       }
 
-      // 9. Center Gravitation
+      // 9. Center Gravitation (vital as turn reaches 90+)
       if (safeMoves.length > 0) {
         safeMoves.sort((a, b) => distToCenter(a) - distToCenter(b));
         const chosen = safeMoves[0];
