@@ -15,27 +15,22 @@ const Cell = {
   POWERUP_POWER: 8,
 }
 
-// Special moves understood by the game.
+// Special moves.
 const Move = {
   PLACE_BOMB: -1,
   STAY: 0,
 }
 
-// Check that two positions touch without wrapping around a board edge.
+// Check that two positions are side by side.
 function isNeighbor(fromPosition, toPosition) {
-  if (toPosition < 0 || toPosition >= TOTAL_CELLS) return false
   const difference = Math.abs(toPosition - fromPosition)
   return difference === BOARD_WIDTH
-    || (difference === 1
-      && Math.floor(fromPosition / BOARD_WIDTH)
-        === Math.floor(toPosition / BOARD_WIDTH))
+    || (difference === 1 && Math.floor(fromPosition / BOARD_WIDTH) === Math.floor(toPosition / BOARD_WIDTH))
 }
 
 // Return the open neighboring positions that a player can move to.
 function getWalkableNeighbors(position, board) {
-  return DIRECTIONS
-    .map((direction) => position + direction)
-    .filter((nextPosition) =>
+  return DIRECTIONS.map((direction) => position + direction).filter((nextPosition) =>
       isNeighbor(position, nextPosition) && board[nextPosition] !== Cell.WALL
       && board[nextPosition] !== Cell.BRICK && board[nextPosition] !== Cell.BOMB
     )
@@ -48,10 +43,7 @@ function getBlastTiles(bombPosition, blastRange, board) {
     for (let distance = 1; distance <= blastRange; distance++) {
       const targetPosition = bombPosition + direction * distance
       // A board edge or wall stops the blast.
-      if (
-        !isNeighbor(targetPosition - direction, targetPosition)
-        || board[targetPosition] === Cell.WALL
-      ) break
+      if (!isNeighbor(targetPosition - direction, targetPosition) || board[targetPosition] === Cell.WALL) break
       blastTiles.add(targetPosition)
       // The blast hits a brick, but does not continue through it.
       if (board[targetPosition] === Cell.BRICK) break
@@ -61,19 +53,21 @@ function getBlastTiles(bombPosition, blastRange, board) {
 }
 
 // Measure the straight-line distance from a position to the board center.
-const distanceToCenter = (position) =>
-  Math.hypot(
-    Math.floor(position / BOARD_WIDTH) - 9.5,
-    (position % BOARD_WIDTH) - 9.5,
-  )
+function distanceToCenter(position) {
+  const row = Math.floor(position / BOARD_WIDTH)
+  const column = position % BOARD_WIDTH
+  return Math.hypot(row - 9.5, column - 9.5)
+}
 
 // Count how many horizontal and vertical steps separate two positions.
-const getStepDistance = (firstPosition, secondPosition) =>
-  Math.abs(
-    Math.floor(firstPosition / BOARD_WIDTH)
-      - Math.floor(secondPosition / BOARD_WIDTH),
-  )
-  + Math.abs((firstPosition % BOARD_WIDTH) - (secondPosition % BOARD_WIDTH))
+function getStepDistance(firstPosition, secondPosition) {
+  firstRow = Math.floor(firstPosition / BOARD_WIDTH)
+  firstColumn = firstPosition % BOARD_WIDTH
+  secondRow = Math.floor(secondPosition / BOARD_WIDTH)
+  secondColumn = secondPosition % BOARD_WIDTH
+
+  return Math.abs(firstRow - secondRow) + Math.abs(firstColumn - secondColumn)
+}
 
 // Follow the saved search route backward and return its first step.
 function getFirstStep(target, start, previousPosition) {
