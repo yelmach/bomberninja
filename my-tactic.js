@@ -61,10 +61,10 @@ function distanceToCenter(position) {
 
 // Count how many horizontal and vertical steps separate two positions.
 function getStepDistance(firstPosition, secondPosition) {
-  firstRow = Math.floor(firstPosition / BOARD_WIDTH)
-  firstColumn = firstPosition % BOARD_WIDTH
-  secondRow = Math.floor(secondPosition / BOARD_WIDTH)
-  secondColumn = secondPosition % BOARD_WIDTH
+  const firstRow = Math.floor(firstPosition / BOARD_WIDTH)
+  const firstColumn = firstPosition % BOARD_WIDTH
+  const secondRow = Math.floor(secondPosition / BOARD_WIDTH)
+  const secondColumn = secondPosition % BOARD_WIDTH
 
   return Math.abs(firstRow - secondRow) + Math.abs(firstColumn - secondColumn)
 }
@@ -114,75 +114,59 @@ function buildDangerMap(myPosition, board) {
 
 // Follow the escape path after placing a bomb.
 function followRetreatPlan(retreatPlan, myPosition, board, danger) {
-  // Keep following the saved path while it is still usable.
   if (retreatPlan.path.length > 0) {
     const nextPosition = retreatPlan.path.shift()
-    if (
-      danger.walkable.includes(nextPosition) && !danger.lethal.has(nextPosition)
-    ) {
+    if (danger.walkable.includes(nextPosition) && !danger.explosion.has(nextPosition)) {
       return nextPosition
     }
   }
 
   // Wait if the player has reached safety and no other bomb can hit this position.
   const myBlast = getBlastTiles(retreatPlan.bombPos, 3, board)
-  const isSafeFromOwnBomb = !myBlast.has(myPosition)
-    && !danger.lethal.has(myPosition)
+  const isSafeFromOwnBomb = !myBlast.has(myPosition) && !danger.explosion.has(myPosition)
 
-  if (isSafeFromOwnBomb) {
-    if (!danger.allBlast.has(myPosition)) {
-      return Move.STAY
-    }
+  if (isSafeFromOwnBomb && !danger.allBlast.has(myPosition)) {
+    return Move.STAY
   }
 
-  // The caller will find another escape move if this plan is no longer safe.
   return null
 }
 
 // Choose the safest available move when the player is in danger.
 function findEscapeMove(myPosition, danger) {
-  // Prefer a safe move toward the center.
   if (danger.safeMoves.length > 0) {
-    danger.safeMoves.sort((firstMove, secondMove) =>
-      distanceToCenter(firstMove) - distanceToCenter(secondMove)
-    )
+    danger.safeMoves.sort((firstMove, secondMove) => distanceToCenter(firstMove) - distanceToCenter(secondMove))
     return danger.safeMoves[0]
   }
 
-  const nonLethalMoves = danger.walkable.filter((move) =>
-    !danger.lethal.has(move)
-  )
+  const nonExplosionMoves = danger.walkable.filter((move) => !danger.explosion.has(move))
 
   // If every move is in a blast path, move as far as possible from the nearest bomb.
-  if (nonLethalMoves.length > 0 && danger.activeBombs.length > 0) {
+  if (nonExplosionMoves.length > 0 && danger.activeBombs.length > 0) {
     const nearestBomb = danger.activeBombs.reduce(
       (closestBomb, bombPosition) =>
         getStepDistance(myPosition, bombPosition)
-            < getStepDistance(myPosition, closestBomb)
+          < getStepDistance(myPosition, closestBomb)
           ? bombPosition
           : closestBomb,
       danger.activeBombs[0],
     )
-    nonLethalMoves.sort((firstMove, secondMove) =>
+    nonExplosionMoves.sort((firstMove, secondMove) =>
       getStepDistance(secondMove, nearestBomb)
       - getStepDistance(firstMove, nearestBomb)
     )
-    return nonLethalMoves[0]
+    return nonExplosionMoves[0]
   }
 
   // Otherwise, use any position without fire and prefer the center.
-  if (nonLethalMoves.length > 0) {
-    nonLethalMoves.sort((firstMove, secondMove) =>
-      distanceToCenter(firstMove) - distanceToCenter(secondMove)
-    )
-    return nonLethalMoves[0]
+  if (nonExplosionMoves.length > 0) {
+    nonExplosionMoves.sort((firstMove, secondMove) => distanceToCenter(firstMove) - distanceToCenter(secondMove))
+    return nonExplosionMoves[0]
   }
 
   // If standing on fire, any walkable move is better than staying still.
   if (danger.walkable.length > 0) {
-    danger.walkable.sort((firstMove, secondMove) =>
-      distanceToCenter(firstMove) - distanceToCenter(secondMove)
-    )
+    danger.walkable.sort((firstMove, secondMove) => distanceToCenter(firstMove) - distanceToCenter(secondMove))
     return danger.walkable[0]
   }
 
@@ -194,11 +178,8 @@ function getClosestOpponent(myPosition, players, myId) {
   let closestOpponent = null
   for (const [playerId, playerPosition] of Object.entries(players)) {
     if (playerId !== myId && playerPosition !== undefined) {
-      if (
-        closestOpponent === null
-        || getStepDistance(myPosition, playerPosition)
-          < getStepDistance(myPosition, closestOpponent)
-      ) {
+      if (closestOpponent === null
+        || getStepDistance(myPosition, playerPosition) < getStepDistance(myPosition, closestOpponent)) {
         closestOpponent = playerPosition
       }
     }
@@ -237,7 +218,7 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
       // A safe position is outside all blasts and fire.
       if (
         !blast.has(currentPosition) && !danger.allBlast.has(currentPosition)
-        && !danger.lethal.has(currentPosition) && currentPosition !== myPosition
+        && !danger.explosion.has(currentPosition) && currentPosition !== myPosition
       ) {
         safePosition = currentPosition
         break
@@ -246,7 +227,7 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
       for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
         if (
           neighbor !== myPosition && previousPosition[neighbor] === -1
-          && !danger.allBlast.has(neighbor) && !danger.lethal.has(neighbor)
+          && !danger.allBlast.has(neighbor) && !danger.explosion.has(neighbor)
         ) {
           previousPosition[neighbor] = currentPosition
           distance[neighbor] = distance[currentPosition] + 1
@@ -268,15 +249,7 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
 }
 
 // Decide whether to place a bomb and prepare a safe retreat path.
-function planBombPlacement(
-  myPosition,
-  board,
-  closestOpponent,
-  danger,
-  positionHistory,
-  myActiveBomb,
-  turn,
-) {
+function planBombPlacement(myPosition, board, closestOpponent, danger, positionHistory, myActiveBomb, turn) {
   // Only place a bomb on an empty cell when no other bomb is close.
   const canPlaceBomb = board[myPosition] === Cell.EMPTY && myActiveBomb === null
   const noBombNearby = danger.activeBombs.every((bombPosition) =>
@@ -302,13 +275,7 @@ function planBombPlacement(
 
   if (shouldBreakBrick || canAttack) {
     // Do not place the bomb unless there is a safe way out.
-    const retreatPath = findRetreatPath(
-      myPosition,
-      board,
-      blast,
-      danger,
-      positionHistory,
-    )
+    const retreatPath = findRetreatPath(myPosition,board,blast,danger,positionHistory)
     if (retreatPath !== null) {
       return { bombPos: myPosition, path: retreatPath }
     }
@@ -379,7 +346,7 @@ function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
     for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
       if (
         neighbor !== myPosition && previousPosition[neighbor] === -1
-        && !danger.allBlast.has(neighbor) && !danger.lethal.has(neighbor)
+        && !danger.allBlast.has(neighbor) && !danger.explosion.has(neighbor)
       ) {
         previousPosition[neighbor] = currentPosition
         distance[neighbor] = distance[currentPosition] + 1
@@ -450,12 +417,7 @@ export default (_initialState, playerId) => {
 
       // Continue the escape plan after placing a bomb.
       if (retreatPlan !== null) {
-        const retreatMove = followRetreatPlan(
-          retreatPlan,
-          myPosition,
-          board,
-          danger,
-        )
+        const retreatMove = followRetreatPlan(retreatPlan, myPosition, board, danger)
         if (retreatMove !== null) {
           return rememberMove(retreatMove)
         }
@@ -463,29 +425,14 @@ export default (_initialState, playerId) => {
       }
 
       // Escape immediately when standing in fire or in a bomb's blast area.
-      if (
-        danger.lethal.has(myPosition)
-        || (danger.allBlast.has(myPosition) && danger.activeBombs.length > 0)
-      ) {
+      if (danger.explosion.has(myPosition) || (danger.allBlast.has(myPosition) && danger.activeBombs.length > 0)) {
         return rememberMove(findEscapeMove(myPosition, danger))
       }
 
-      const closestOpponent = getClosestOpponent(
-        myPosition,
-        state.players,
-        playerId,
-      )
+      const closestOpponent = getClosestOpponent(myPosition, state.players, playerId)
 
       // Place a bomb only when there is a reason and a safe escape path.
-      const bombPlan = planBombPlacement(
-        myPosition,
-        board,
-        closestOpponent,
-        danger,
-        positionHistory,
-        myActiveBomb,
-        turn,
-      )
+      const bombPlan = planBombPlacement(myPosition, board, closestOpponent, danger, positionHistory, myActiveBomb, turn)
       if (bombPlan !== null) {
         myActiveBomb = myPosition
         retreatPlan = bombPlan
@@ -493,9 +440,7 @@ export default (_initialState, playerId) => {
       }
 
       // Otherwise, move toward the best goal found on the board.
-      return rememberMove(
-        findGoalMove(myPosition, board, closestOpponent, danger, turn),
-      )
+      return rememberMove(findGoalMove(myPosition, board, closestOpponent, danger, turn))
     } catch (_err) {
       return Move.STAY // Stay still if an unexpected error happens.
     }
