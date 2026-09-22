@@ -69,37 +69,31 @@ function getStepDistance(firstPosition, secondPosition) {
   return Math.abs(firstRow - secondRow) + Math.abs(firstColumn - secondColumn)
 }
 
-// Follow the saved search route backward and return its first step.
-function getFirstStep(target, start, previousPosition) {
-  let step = target
-  while (previousPosition[step] !== start && previousPosition[step] !== -1) {
-    step = previousPosition[step]
-  }
-  return step
-}
-
-// Follow the saved search route backward and rebuild the full path.
-function getFullPath(target, start, previousPosition) {
+// Follow the saved search route backward and rebuild the path from start to target.
+function buildPath(target, start, previousPosition) {
   const path = []
   let currentPosition = target
-  while (currentPosition !== start && currentPosition !== -1) {
-    path.unshift(currentPosition)
+
+  while (currentPosition !== start) {
+    if (currentPosition === -1) return null
+    path.push(currentPosition)
     currentPosition = previousPosition[currentPosition]
   }
-  return path
+
+  return path.reverse()
 }
 
 // Find bombs, explosions, and safe moves around the player.
 function buildDangerMap(myPosition, board) {
   const activeBombs = []
-  const lethal = new Set()
+  const explosion = new Set()
 
   // Read the board once to find every current danger.
   for (let position = 0; position < TOTAL_CELLS; position++) {
     if (board[position] === Cell.BOMB) {
       activeBombs.push(position)
     } else if (board[position] === Cell.EXPLOSION) {
-      lethal.add(position) // This can be an explosion or the fire at the board edge.
+      explosion.add(position) // This can be an explosion or the fire at the board edge.
     }
   }
 
@@ -113,11 +107,9 @@ function buildDangerMap(myPosition, board) {
 
   // Safe moves are walkable positions outside explosions and bomb blasts.
   const walkable = getWalkableNeighbors(myPosition, board)
-  const safeMoves = walkable.filter((move) =>
-    !lethal.has(move) && !allBlast.has(move)
-  )
+  const safeMoves = walkable.filter((move) => !explosion.has(move) && !allBlast.has(move))
 
-  return { activeBombs, lethal, allBlast, walkable, safeMoves }
+  return { activeBombs, explosion, allBlast, walkable, safeMoves }
 }
 
 // Follow the escape path after placing a bomb.
@@ -264,7 +256,7 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
     }
 
     if (safePosition !== -1) {
-      path = getFullPath(safePosition, myPosition, previousPosition)
+      path = buildPath(safePosition, myPosition, previousPosition) ?? []
     }
   }
 
@@ -406,8 +398,9 @@ function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
     : opponentTarget
 
   if (target !== -1) {
-    const firstStep = getFirstStep(target, myPosition, previousPosition)
-    if (danger.safeMoves.includes(firstStep)) {
+    const path = buildPath(target, myPosition, previousPosition)
+    const firstStep = path?.[0]
+    if (firstStep !== undefined && danger.safeMoves.includes(firstStep)) {
       return firstStep
     }
   }
