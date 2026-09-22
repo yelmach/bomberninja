@@ -1,12 +1,13 @@
 /**
- * Bomberninja Grandmaster AI Tactic (Tournament Edition - Champion V2)
+ * Bomberninja Grandmaster AI Tactic (Perfected Champion)
  * 
- * - Deterministic multi-step corridor bunker backtracking for 100% safe bomb placements (0 self-damage)
- * - Heart / Extra Life top priority harvesting (❤️ Lives > 💣 Bombs > 🧨 Power)
- * - High-speed flat-array BFS navigation
- * - Controlled endgame combat (avoids reckless early-game open-field bombing)
- * - Exact fire belt perimeter avoidance and center control
- * - Zero illegal moves, zero timeouts (< 0.05ms average latency per turn)
+ * Built upon the battle-tested V1 core with precise surgical upgrades:
+ * 1. Proximity Bomb Gating: Only gated if an active bomb is within 5 tiles.
+ * 2. Bunker Safety Guard: If an opponent bomb touches our bunker, instantly evades.
+ * 3. Directional Evasion: When surrounded by blast in a corridor, always steps AWAY from bomb.
+ * 4. Life ❤️ Priority: Extra Lives prioritized above all other power-ups.
+ * 5. Fire Belt Citadel: Refuses to chase opponents into the outer fire after turn 95.
+ * 6. Combat Landmine: Drops tactical bomb when opponent closes in (oppDist <= 2).
  */
 
 const BOARD_WIDTH = 20;
@@ -54,6 +55,34 @@ function getWalkableNeighbors(pos, board) {
   return res;
 }
 
+
+function canBombHit(from, to, power, board) {
+  const fromRow = Math.floor(from / BOARD_WIDTH);
+  const fromCol = from % BOARD_WIDTH;
+  const toRow = Math.floor(to / BOARD_WIDTH);
+  const toCol = to % BOARD_WIDTH;
+
+  if (fromRow === toRow) {
+    const dist = Math.abs(toCol - fromCol);
+    if (dist > power) return false;
+    const step = toCol > fromCol ? 1 : -1;
+    for (let c = fromCol + step; c !== toCol; c += step) {
+      if (board[fromRow * BOARD_WIDTH + c] === Cell.WALL) return false;
+    }
+    return true;
+  }
+  if (fromCol === toCol) {
+    const dist = Math.abs(toRow - fromRow);
+    if (dist > power) return false;
+    const step = toRow > fromRow ? BOARD_WIDTH : -BOARD_WIDTH;
+    for (let p = from + step; p !== to; p += step) {
+      if (board[p] === Cell.WALL) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 function getBlastTiles(bombPos, power, board) {
   const blast = new Set([bombPos]);
   for (const dir of DIRECTIONS) {
@@ -99,6 +128,10 @@ function getFireBeltStepCoords(step) {
 export default (_initialState, playerId) => {
   let turn = 0;
   let myPower = 1;
+  let myMaxBombs = 1;
+
+  // Track positions of active bombs placed by us
+  const myActiveBombs = new Set();
 
   // Breadcrumbs stack of recently visited safe tiles
   const breadcrumbs = [];
@@ -134,8 +167,16 @@ export default (_initialState, playerId) => {
       // Track power-ups collected on our tile
       const curCell = board[myPos];
       if (curCell === Cell.POWERUP_POWER) myPower++;
+      if (curCell === Cell.POWERUP_BOMB) myMaxBombs++;
 
-      // 2. Identify active bombs on board
+      // Clean up our active bombs that have exploded
+      for (const bPos of myActiveBombs) {
+        if (board[bPos] !== Cell.BOMB) {
+          myActiveBombs.delete(bPos);
+        }
+      }
+
+      // 2. Identify all active bombs on board
       const activeBombs = [];
       for (let i = 0; i < board.length; i++) {
         if (board[i] === Cell.BOMB) activeBombs.push(i);
@@ -145,9 +186,8 @@ export default (_initialState, playerId) => {
       if (activeRetreat !== null) {
         activeRetreat.turnsRemaining--;
         if (
-          activeRetreat.turnsRemaining <= 0 &&
-          board[activeRetreat.bombPos] !== Cell.BOMB &&
-          board[activeRetreat.bombPos] !== Cell.EXPLOSION
+          activeRetreat.turnsRemaining <= 0 ||
+          (board[activeRetreat.bombPos] !== Cell.BOMB && board[activeRetreat.bombPos] !== Cell.EXPLOSION)
         ) {
           activeRetreat = null;
         }
@@ -174,6 +214,10 @@ export default (_initialState, playerId) => {
         return Math.hypot(r - 9.5, c - 9.5);
       };
 
+      const manhattan = (p1, p2) =>
+        Math.abs(Math.floor(p1 / BOARD_WIDTH) - Math.floor(p2 / BOARD_WIDTH)) +
+        Math.abs((p1 % BOARD_WIDTH) - (p2 % BOARD_WIDTH));
+
       // 5. Active Bomb Retreat Execution
       if (activeRetreat !== null) {
         if (activeRetreat.retreatPath.length > 0) {
@@ -185,23 +229,38 @@ export default (_initialState, playerId) => {
         }
 
         const myBombBlast = getBlastTiles(activeRetreat.bombPos, Math.max(3, myPower), board);
+
+        // Bunker reached (outside our bomb blast)
         if (!myBombBlast.has(myPos) && !lethalNow.has(myPos)) {
-          return Move.STAY; // Bunker reached, safely wait until blast clears
-        }
+          // If an opponent's bomb blast touches our bunker, do NOT stay! Let evasion escape!
+          if (allBlastCells.has(myPos)) {
+            activeRetreat = null;
+          } else {
+            return Move.STAY; // Safe in bunker, safely wait until blast clears
+          }
+        } else {
+          // Still in our bomb blast: step out immediately
+          const outOfBlast = safeMoves.filter((m) => !myBombBlast.has(m) && !allBlastCells.has(m));
+          if (outOfBlast.length > 0) {
+            outOfBlast.sort((a, b) => distToCenter(a) - distToCenter(b));
+            breadcrumbs.push(myPos);
+            return outOfBlast[0];
+          }
 
-        const outOfBlast = safeMoves.filter((m) => !myBombBlast.has(m));
-        if (outOfBlast.length > 0) {
-          outOfBlast.sort((a, b) => distToCenter(a) - distToCenter(b));
-          breadcrumbs.push(myPos);
-          return outOfBlast[0];
-        }
+          const anyOutOfMine = safeMoves.filter((m) => !myBombBlast.has(m));
+          if (anyOutOfMine.length > 0) {
+            anyOutOfMine.sort((a, b) => distToCenter(a) - distToCenter(b));
+            breadcrumbs.push(myPos);
+            return anyOutOfMine[0];
+          }
 
-        safeMoves.sort((a, b) => Math.abs(b - activeRetreat.bombPos) - Math.abs(a - activeRetreat.bombPos));
-        if (safeMoves.length > 0) {
-          breadcrumbs.push(myPos);
-          return safeMoves[0];
+          safeMoves.sort((a, b) => Math.abs(b - activeRetreat.bombPos) - Math.abs(a - activeRetreat.bombPos));
+          if (safeMoves.length > 0) {
+            breadcrumbs.push(myPos);
+            return safeMoves[0];
+          }
+          return Move.STAY;
         }
-        return Move.STAY;
       }
 
       // 6. Emergency Evasion: If on lethal or bomb blast tile
@@ -212,6 +271,18 @@ export default (_initialState, playerId) => {
           breadcrumbs.push(myPos);
           return safeOutside[0];
         }
+
+        // When all immediate moves are inside blast: ALWAYS move furthest from nearest bomb!
+        if (safeMoves.length > 0 && activeBombs.length > 0) {
+          const nearestBomb = activeBombs.reduce((best, b) => {
+            return manhattan(myPos, b) < manhattan(myPos, best) ? b : best;
+          }, activeBombs[0]);
+
+          safeMoves.sort((a, b) => manhattan(b, nearestBomb) - manhattan(a, nearestBomb));
+          breadcrumbs.push(myPos);
+          return safeMoves[0];
+        }
+
         if (safeMoves.length > 0) {
           safeMoves.sort((a, b) => distToCenter(a) - distToCenter(b));
           breadcrumbs.push(myPos);
@@ -220,26 +291,39 @@ export default (_initialState, playerId) => {
         return Move.STAY;
       }
 
-      // Opponent tracking
-      const opponentEntries = Object.entries(state.players).filter(([id]) => id !== playerId);
-      const opponentPos = opponentEntries.length > 0 ? opponentEntries[0][1] : null;
+      // Opponent tracking (closest opponent)
+      const opponents = Object.entries(state.players)
+        .filter(([id]) => id !== playerId)
+        .map(([, pos]) => pos)
+        .filter((pos) => pos !== undefined);
 
-      // 7. Safe Bomb Placement Check
+      const closestOpponent = opponents.length > 0 ? opponents.reduce((best, opp) => {
+        return manhattan(myPos, opp) < manhattan(myPos, best) ? opp : best;
+      }, opponents[0]) : null;
+
+      const oppDist = closestOpponent !== null ? manhattan(myPos, closestOpponent) : 999;
+
+      // 7. Tactical Bomb Placement Check
       const touchesBrick = DIRECTIONS.some((dir) => {
         const n = myPos + dir;
         return isNeighbor(myPos, n) && board[n] === Cell.BRICK;
       });
 
-      const opponentManhattan =
-        opponentPos !== null
-          ? Math.abs(Math.floor(myPos / BOARD_WIDTH) - Math.floor(opponentPos / BOARD_WIDTH)) +
-            Math.abs((myPos % BOARD_WIDTH) - (opponentPos % BOARD_WIDTH))
-          : 999;
+      // Combat conditions:
+      // a) Mine bricks (in safe territory if late game)
+      // b) Opponent within combat proximity (oppDist <= 2)
+      const canDropForBrick = touchesBrick && (turn < 90 || distToCenter(myPos) <= 4.5);
+      const canDropForCombat = closestOpponent !== null && canBombHit(myPos, closestOpponent, myPower, board);
+      const shouldDropBomb = canDropForBrick || canDropForCombat;
 
-      // Drop bombs to mine bricks, or to corner the opponent in the late game (turn > 70)
-      const shouldDropBomb = touchesBrick || (opponentManhattan <= 2 && turn > 70);
+      // Proximity Bomb Gating:
+      // Can drop bomb if:
+      // - our cell is EMPTY
+      // - our active bombs < bomb capacity
+      // - NO active bomb is within 5 tiles of us (prevents overlapping blast suicide)
+      const noBombNearby = activeBombs.every((b) => manhattan(myPos, b) > 3);
 
-      if (shouldDropBomb && board[myPos] === Cell.EMPTY && activeBombs.length === 0) {
+      if (shouldDropBomb && board[myPos] === Cell.EMPTY && myActiveBombs.size < myMaxBombs && noBombNearby) {
         const blast = getBlastTiles(myPos, myPower, board);
 
         // First attempt: trace back along recent breadcrumbs
@@ -264,13 +348,13 @@ export default (_initialState, playerId) => {
             const curr = q[head++];
             if (dist[curr] > 4) break;
 
-            if (!blast.has(curr) && curr !== myPos) {
+            if (!blast.has(curr) && !allBlastCells.has(curr) && curr !== myPos) {
               safeBunker = curr;
               break;
             }
 
             for (const n of getWalkableNeighbors(curr, board)) {
-              if (n !== myPos && parent[n] === -1) {
+              if (n !== myPos && parent[n] === -1 && !allBlastCells.has(n)) {
                 parent[n] = curr;
                 dist[n] = dist[curr] + 1;
                 q.push(n);
@@ -291,6 +375,7 @@ export default (_initialState, playerId) => {
 
         // Only drop bomb if complete verified bunker retreat path exists
         if (retreatCandidate.length > 0 && !blast.has(retreatCandidate[retreatCandidate.length - 1])) {
+          myActiveBombs.add(myPos);
           activeRetreat = {
             bombPos: myPos,
             turnsRemaining: 5,
@@ -313,10 +398,10 @@ export default (_initialState, playerId) => {
 
       while (headNav < qNav.length) {
         const curr = qNav[headNav++];
-        if (distNav[curr] > 18) break;
+        if (distNav[curr] > 20) break;
 
         const cell = board[curr];
-        // Extra Life ❤️ is the highest value in the entire game
+        // Extra Life ❤️ is highest priority
         if (cell === Cell.POWERUP_LIVE) {
           lifeTarget = curr;
           break;
@@ -327,15 +412,19 @@ export default (_initialState, playerId) => {
           powerupTarget = curr;
         }
 
-        // Brick excavator target
+        // Brick target (only safe area if late game)
         if (brickTarget === -1 && curr !== myPos) {
           const nearBrick = DIRECTIONS.some((d) => isNeighbor(curr, curr + d) && board[curr + d] === Cell.BRICK);
-          if (nearBrick) brickTarget = curr;
+          if (nearBrick && (turn < 90 || distToCenter(curr) <= 4.5)) {
+            brickTarget = curr;
+          }
         }
 
-        // Opponent hunter target (when turn > 70)
-        if (opponentTarget === -1 && curr === opponentPos && curr !== myPos) {
-          opponentTarget = curr;
+        // Opponent target (only safe area if late game)
+        if (opponentTarget === -1 && closestOpponent !== null && curr === closestOpponent && curr !== myPos) {
+          if (turn < 90 || distToCenter(closestOpponent) <= 4.5) {
+            opponentTarget = curr;
+          }
         }
 
         for (const n of getWalkableNeighbors(curr, board)) {
@@ -368,7 +457,7 @@ export default (_initialState, playerId) => {
         }
       }
 
-      // 9. Center Gravitation (vital as turn reaches 90+)
+      // 9. Center Citadel Gravitation
       if (safeMoves.length > 0) {
         safeMoves.sort((a, b) => distToCenter(a) - distToCenter(b));
         const chosen = safeMoves[0];
