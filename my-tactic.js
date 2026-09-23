@@ -191,11 +191,7 @@ function getClosestOpponent(myPosition, players, myId) {
 function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
   // First, try to go back through recently visited positions.
   let path = []
-  for (
-    let index = positionHistory.length - 1;
-    index >= 0 && path.length < 4;
-    index--
-  ) {
+  for (let index = positionHistory.length - 1; index >= 0 && path.length < 4; index--) {
     const previousPosition = positionHistory[index]
     if (previousPosition !== myPosition && !path.includes(previousPosition)) {
       path.push(previousPosition)
@@ -216,17 +212,16 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
       if (distance[currentPosition] > 4) break
 
       // A safe position is outside all blasts and fire.
-      if (
-        !blast.has(currentPosition) && !danger.allBlast.has(currentPosition)
+      if (!blast.has(currentPosition) && !danger.allBlast.has(currentPosition)
         && !danger.explosion.has(currentPosition) && currentPosition !== myPosition
       ) {
         safePosition = currentPosition
         break
       }
 
+      // Explore neighboring cells
       for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
-        if (
-          neighbor !== myPosition && previousPosition[neighbor] === -1
+        if (neighbor !== myPosition && previousPosition[neighbor] === -1
           && !danger.allBlast.has(neighbor) && !danger.explosion.has(neighbor)
         ) {
           previousPosition[neighbor] = currentPosition
@@ -252,12 +247,10 @@ function findRetreatPath(myPosition, board, blast, danger, positionHistory) {
 function planBombPlacement(myPosition, board, closestOpponent, danger, positionHistory, myActiveBomb, turn) {
   // Only place a bomb on an empty cell when no other bomb is close.
   const canPlaceBomb = board[myPosition] === Cell.EMPTY && myActiveBomb === null
-  const noBombNearby = danger.activeBombs.every((bombPosition) =>
-    getStepDistance(myPosition, bombPosition) > 3
-  )
+  const noBombNearby = danger.activeBombs.every((bombPosition) => getStepDistance(myPosition, bombPosition) > 3)
   if (!canPlaceBomb || !noBombNearby) return null
 
-  // Place bombs beside bricks, but be more careful when the board starts shrinking.
+  // Check for a neighboring brick and check whether the player can move to the center
   const isNextToBrick = DIRECTIONS.some((direction) =>
     isNeighbor(myPosition, myPosition + direction)
     && board[myPosition + direction] === Cell.BRICK
@@ -266,8 +259,7 @@ function planBombPlacement(myPosition, board, closestOpponent, danger, positionH
     distanceToCenter(move) < distanceToCenter(myPosition)
   )
   const shouldBreakBrick = isNextToBrick
-    && (turn < 90 || distanceToCenter(myPosition) <= 4.5
-      || !canMoveCloserToCenter)
+    && (turn < 90 || distanceToCenter(myPosition) <= 4.5 || !canMoveCloserToCenter)
 
   // Also place a bomb when the nearest opponent is beside the player.
   const blast = getBlastTiles(myPosition, 1, board)
@@ -275,7 +267,7 @@ function planBombPlacement(myPosition, board, closestOpponent, danger, positionH
 
   if (shouldBreakBrick || canAttack) {
     // Do not place the bomb unless there is a safe way out.
-    const retreatPath = findRetreatPath(myPosition,board,blast,danger,positionHistory)
+    const retreatPath = findRetreatPath(myPosition, board, blast, danger, positionHistory)
     if (retreatPath !== null) {
       return { bombPos: myPosition, path: retreatPath }
     }
@@ -303,19 +295,13 @@ function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
     const cell = board[currentPosition]
 
     // First priority: extra life.
-    if (
-      cell === Cell.POWERUP_LIVE
-      && (turn < 95 || distanceToCenter(currentPosition) <= 5.5)
-    ) {
+    if (cell === Cell.POWERUP_LIVE && (turn < 95 || distanceToCenter(currentPosition) <= 5.5)) {
       lifeTarget = currentPosition
       break
     }
 
     // Second priority: bomb and power upgrades.
-    if (
-      powerTarget === -1
-      && (cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER)
-    ) {
+    if (powerTarget === -1 && (cell === Cell.POWERUP_BOMB || cell === Cell.POWERUP_POWER)) {
       if (turn < 90 || distanceToCenter(currentPosition) <= 4.5) {
         powerTarget = currentPosition
       }
@@ -327,14 +313,12 @@ function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
         isNeighbor(currentPosition, currentPosition + direction)
         && board[currentPosition + direction] === Cell.BRICK
       )
-      if (
-        isNearBrick && (turn < 90 || distanceToCenter(currentPosition) <= 4.5)
+      if (isNearBrick && (turn < 90 || distanceToCenter(currentPosition) <= 4.5)
       ) brickTarget = currentPosition
     }
 
     // Fourth priority: move toward the nearest opponent.
-    if (
-      opponentTarget === -1 && closestOpponent !== null
+    if (opponentTarget === -1 && closestOpponent !== null
       && currentPosition === closestOpponent && currentPosition !== myPosition
     ) {
       if (turn < 90 || distanceToCenter(closestOpponent) <= 4.5) {
@@ -344,8 +328,7 @@ function findGoalMove(myPosition, board, closestOpponent, danger, turn) {
 
     // Continue the search through walkable and safe positions.
     for (const neighbor of getWalkableNeighbors(currentPosition, board)) {
-      if (
-        neighbor !== myPosition && previousPosition[neighbor] === -1
+      if (neighbor !== myPosition && previousPosition[neighbor] === -1
         && !danger.allBlast.has(neighbor) && !danger.explosion.has(neighbor)
       ) {
         previousPosition[neighbor] = currentPosition
